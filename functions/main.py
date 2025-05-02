@@ -1,12 +1,8 @@
-# Welcome to Cloud Functions for Firebase for Python!
-# Deploy with `firebase deploy`
-
 import os
-import xml.etree.ElementTree as ET
+import hashlib
 from datetime import datetime
 
-import hashlib
-import requests
+import feedparser
 from firebase_admin import initialize_app, firestore
 from firebase_functions import scheduler_fn, https_fn
 from flask import Request, Response, jsonify
@@ -17,7 +13,7 @@ initialize_app()
 
 def _fetch_rss_and_store_impl() -> dict:
     """
-    Implementation of RSS fetching and storing logic.
+    Implementation of RSS fetching and storing logic using feedparser.
     Returns a dictionary with the results of the operation.
     """
     results = {
@@ -39,82 +35,48 @@ def _fetch_rss_and_store_impl() -> dict:
         return results
 
     try:
-        # Fetch RSS feed
-        response = requests.get(rss_feed_url)
-        response.raise_for_status()  # Raise exception for HTTP errors
-
-        # Parse XML
-        root = ET.fromstring(response.content)
-
-        # Find the namespace if it exists
-        namespace = ""
-        if root.tag.startswith("{"):
-            namespace = root.tag.split("}")[0] + "}"
-
-        # Get channel element
-        channel = root.find(f"{namespace}channel")
-        if channel is None:
-            error_msg = "Error: Could not find channel element in RSS feed"
-            print(error_msg)
-            results["success"] = False
-            results["errors"].append(error_msg)
-            return results
-
-        # Get items
-        items = channel.findall(f"{namespace}item")
-        if not items:
+        # Parse RSS feed with feedparser
+        feed = feedparser.parse(rss_feed_url)
+        
+        # Check if feed has entries
+        if not feed.entries:
             print("No items found in RSS feed")
             return results
-
+            
         # Initialize Firestore client
         db = firestore.client()
         collection_ref = db.collection(collection_name)
-
+        
         # Process each item
-        for item in items:
-            # Extract item data
-            title_elem = item.find(f"{namespace}title")
-            link_elem = item.find(f"{namespace}link")
-            description_elem = item.find(f"{namespace}description")
-            pub_date_elem = item.find(f"{namespace}pubDate")
-            guid_elem = item.find(f"{namespace}guid")
-
-            # Skip if required fields are missing
-            if guid_elem is None or title_elem is None:
+        for entry in feed.entries:
+            # Use guid or link as unique identifier
+            guid = getattr(entry, 'id', None) or entry.link
+            
+            # Skip if no unique identifier is available
+            if not guid:
                 continue
-
-            guid = guid_elem.text
-
+                
             # Create item data
             item_data = {
-                "title": title_elem.text if title_elem is not None else "",
-                "link": link_elem.text if link_elem is not None else "",
-                "description": description_elem.text if description_elem is not None else "",
-                "pubDate": pub_date_elem.text if pub_date_elem is not None else "",
+                "title": getattr(entry, 'title', ''),
+                "link": getattr(entry, 'link', ''),
+                "description": getattr(entry, 'description', ''),
+                "pubDate": getattr(entry, 'published', ''),
                 "guid": guid,
                 "fetchedAt": datetime.utcnow().isoformat()
             }
-
+            
             doc_id = hashlib.md5(guid.encode('utf-8')).hexdigest()
             doc_ref = collection_ref.document(str(doc_id))
             doc_ref.set(item_data, merge=True)
-
-    except requests.RequestException as e:
-        error_msg = f"Error fetching RSS feed: {e}"
-        print(error_msg)
-        results["success"] = False
-        results["errors"].append(error_msg)
-    except ET.ParseError as e:
-        error_msg = f"Error parsing RSS feed: {e}"
-        print(error_msg)
-        results["success"] = False
-        results["errors"].append(error_msg)
+            results["items_added"] += 1
+            
     except Exception as e:
-        error_msg = f"Unexpected error: {e}"
+        error_msg = f"Error processing RSS feed: {e}"
         print(error_msg)
         results["success"] = False
         results["errors"].append(error_msg)
-
+        
     return results
 
 
