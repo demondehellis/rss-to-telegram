@@ -5,6 +5,7 @@ import os
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
+import hashlib
 import requests
 from firebase_admin import initialize_app, firestore
 from firebase_functions import scheduler_fn, https_fn
@@ -94,23 +95,9 @@ def _fetch_rss_and_store_impl() -> dict:
                 "fetchedAt": datetime.utcnow().isoformat()
             }
 
-            # Sanitize guid for use as document ID (replace slashes with underscores)
-            # This prevents Firestore from interpreting the guid as a path
-            safe_guid = guid.replace("/", "_").replace("\\", "_")
-
-            # Use sanitized guid as document ID to avoid duplicates
-            doc_ref = collection_ref.document(safe_guid)
-
-            # Check if document already exists
-            doc = doc_ref.get()
-            if not doc.exists:
-                # Add new document
-                doc_ref.set(item_data)
-                print(f"Added new item: {item_data['title']}")
-                results["items_added"] += 1
-            else:
-                print(f"Item already exists: {item_data['title']}")
-                results["items_existing"] += 1
+            doc_id = hashlib.md5(guid.encode('utf-8')).hexdigest()
+            doc_ref = collection_ref.document(str(doc_id))
+            doc_ref.set(item_data, merge=True)
 
     except requests.RequestException as e:
         error_msg = f"Error fetching RSS feed: {e}"
