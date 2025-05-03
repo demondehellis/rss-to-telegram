@@ -1,4 +1,5 @@
 functions/venv
 .runtimeconfig.json
+.emulator-data
 **/.env
 **.log
