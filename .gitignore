@@ -3,3 +3,4 @@ functions/venv
 .emulator-data
 **/.env
 **.log
+**/*.cache
